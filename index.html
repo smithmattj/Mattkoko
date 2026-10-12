@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ECEFED">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0D1411">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Kokoro Reader">
+<title>Kokoro Reader</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230C6A57'/%3E%3Cg fill='%23F2FBF7'%3E%3Crect x='4.5' y='12.5' width='3' height='7' rx='1.5'/%3E%3Crect x='9.5' y='8.5' width='3' height='15' rx='1.5'/%3E%3Crect x='14.5' y='4.5' width='3' height='23' rx='1.5'/%3E%3Crect x='19.5' y='9.5' width='3' height='13' rx='1.5'/%3E%3Crect x='24.5' y='13.5' width='3' height='5' rx='1.5'/%3E%3C/g%3E%3C/svg%3E">
+
+<!-- Maps the bare imports inside kokoro-js to browser builds on jsDelivr.
+     "path" and "fs/promises" are only used by kokoro-js under Node, so they get empty stubs. -->
+<script type="importmap">
+{
+  "imports": {
+    "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/dist/transformers.min.js",
+    "phonemizer": "https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js",
+    "path": "data:text/javascript,export%20default%20%7B%7D%3B",
+    "fs/promises": "data:text/javascript,export%20default%20%7B%7D%3B"
+  }
+}
+</script>
+
+<style>
+/* Layout: one narrow column, phone first. Panels hold inputs; results are plain rows. */
+:root {
+  --bg: #ECEFED;
+  --panel: #F8FAF9;
+  --ink: #14211C;
+  --muted: #56655E;
+  --line: #CAD3CE;
+  --accent: #0C6A57;
+  --on-accent: #F2FBF7;
+  --danger: #A8261D;
+  --danger-bg: #F7E1DD;
+  --font-display: "New York", ui-serif, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-ui: ui-sans-serif, -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0D1411;
+    --panel: #151F1B;
+    --ink: #E4EEE9;
+    --muted: #93A69D;
+    --line: #2A3A32;
+    --accent: #4DC4A4;
+    --on-accent: #05231A;
+    --danger: #FF9A91;
+    --danger-bg: #3A1C19;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 var(--font-ui);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+[hidden] { display: none !important; }
+
+.wrap {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
+  display: grid;
+  gap: 1rem;
+}
+
+/* Masthead */
+.masthead { display: grid; gap: 0.4rem; padding-block: 0.25rem 0.5rem; }
+.title-row { display: flex; align-items: center; gap: 0.75rem; }
+h1 {
+  margin: 0;
+  font: 600 2rem/1.1 var(--font-display);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.mark { display: flex; align-items: center; gap: 3px; height: 34px; flex: none; }
+.mark i { display: block; width: 4px; height: var(--h); border-radius: 2px; background: var(--accent); }
+@keyframes bar { 0%, 100% { transform: scaleY(0.45); } 50% { transform: scaleY(1); } }
+body.busy .mark i { animation: bar 1s ease-in-out infinite; animation-delay: calc(var(--n) * -0.17s); }
+@media (prefers-reduced-motion: reduce) { body.busy .mark i { animation: none; } }
+.tag { margin: 0; color: var(--muted); }
+.status { margin: 0; font: 0.78rem/1.3 var(--font-mono); color: var(--muted); }
+.status::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--line);
+}
+.status.ready::before { background: var(--accent); }
+
+/* Panels */
+.panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+h2 {
+  margin: 0;
+  font: 600 0.75rem/1 var(--font-ui);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+label, .lbl { display: block; font-weight: 600; font-size: 0.9rem; margin-bottom: 0.3rem; }
+.hint { margin: 0; font-size: 0.85rem; color: var(--muted); }
+
+input[type="text"], textarea, select {
+  width: 100%;
+  font: 16px/1.45 var(--font-ui);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  min-height: 46px;
+}
+textarea { min-height: 11rem; resize: vertical; }
+input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0.25rem 0 0; min-height: 32px; }
+output { font: 0.85rem var(--font-mono); color: var(--muted); font-weight: 400; margin-left: 0.4rem; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.row .count { margin-left: auto; font: 0.8rem var(--font-mono); color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.75rem; }
+.grid2 > div { min-width: 0; }
+.voice-row { display: flex; gap: 0.5rem; align-items: stretch; }
+.voice-row select { flex: 1; min-width: 0; }
+.check { display: flex; gap: 0.6rem; align-items: flex-start; font-weight: 400; margin: 0; }
+.check input { width: 1.25rem; height: 1.25rem; margin: 0.15rem 0 0; accent-color: var(--accent); flex: none; }
+details.more summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; min-height: 32px; display: flex; align-items: center; }
+details.more > div { display: grid; gap: 0.6rem; padding-top: 0.5rem; }
+
+/* Buttons */
+.btn {
+  min-height: 46px;
+  padding: 0 1rem;
+  font: 600 0.95rem var(--font-ui);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.btn.quiet { background: transparent; }
+.btn.primary {
+  width: 100%;
+  min-height: 52px;
+  font-size: 1.05rem;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: transparent;
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Segmented control */
+.seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.seg button {
+  min-height: 44px;
+  font: 600 0.95rem var(--font-ui);
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.seg button[aria-selected="true"] { color: var(--ink); background: var(--panel); box-shadow: 0 0 0 1px var(--line); }
+.pane { display: grid; gap: 0.75rem; }
+
+/* File picker */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.drop {
+  display: grid;
+  gap: 0.2rem;
+  place-items: center;
+  text-align: center;
+  margin: 0;
+  padding: 1.4rem 1rem;
+  font-weight: 400;
+  background: var(--bg);
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.drop strong { font-size: 1rem; }
+.drop span { color: var(--muted); font-size: 0.85rem; }
+.drop.over, #fileInput:focus-visible + .drop { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.files { list-style: none; margin: 0; padding: 0; display: grid; }
+.files li { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-top: 1px solid var(--line); }
+.files li:first-child { border-top: 0; }
+.files .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.files .meta { font: 0.78rem var(--font-mono); color: var(--muted); white-space: nowrap; }
+.files button { min-width: 44px; min-height: 44px; font-size: 1.2rem; line-height: 1; color: var(--muted); background: transparent; border: 0; cursor: pointer; }
+
+/* Run */
+.est { margin: 0; font: 0.8rem/1.4 var(--font-mono); color: var(--muted); }
+.progress { display: grid; gap: 0.5rem; }
+.bar { height: 8px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); border-radius: 99px; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.25s; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+.bar.indeterminate > i { width: 33%; transition: none; animation: slide 1.3s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .bar.indeterminate > i { animation: none; width: 100%; opacity: 0.5; } }
+.plabel { margin: 0; font-weight: 600; }
+.psub { margin: 0; font: 0.8rem/1.4 var(--font-mono); color: var(--muted); }
+.note, .error { margin: 0; padding: 0.7rem 0.85rem; border-radius: 10px; font-size: 0.9rem; }
+.note { background: var(--bg); border: 1px solid var(--line); }
+.error { color: var(--danger); background: var(--danger-bg); }
+.error code { display: block; margin-top: 0.35rem; font: 0.78rem/1.4 var(--font-mono); overflow-wrap: anywhere; }
+
+/* Results */
+.results { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+.result { display: grid; gap: 0.6rem; padding: 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.result h3 { margin: 0; font: 600 1.15rem/1.25 var(--font-display); overflow-wrap: anywhere; text-wrap: balance; }
+.result .meta { margin: 0; font: 0.78rem/1.4 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.result audio, #previewAudio { width: 100%; }
+.result .row .btn { flex: 1 1 auto; }
+
+footer { color: var(--muted); font-size: 0.8rem; display: grid; gap: 0.4rem; }
+footer p { margin: 0; }
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <header class="masthead">
+    <div class="title-row">
+      <div class="mark" aria-hidden="true">
+        <i style="--h:10px;--n:0"></i><i style="--h:20px;--n:1"></i><i style="--h:32px;--n:2"></i><i style="--h:18px;--n:3"></i><i style="--h:8px;--n:4"></i>
+      </div>
+      <h1>Kokoro Reader</h1>
+    </div>
+    <p class="tag">Turn text into spoken audio. Everything runs on this device.</p>
+    <p class="status" id="engineStatus" role="status">Speech model not loaded yet</p>
+  </header>
+
+  <section class="panel" aria-labelledby="h-input">
+    <h2 id="h-input">Text</h2>
+
+    <div class="seg" role="tablist" aria-label="Where the text comes from">
+      <button type="button" role="tab" id="tab-paste" aria-selected="true" aria-controls="pane-paste">Paste</button>
+      <button type="button" role="tab" id="tab-files" aria-selected="false" aria-controls="pane-files" tabindex="-1">Files</button>
+    </div>
+
+    <div class="pane" id="pane-paste" role="tabpanel" aria-labelledby="tab-paste">
+      <div>
+        <label for="title">Title</label>
+        <input id="title" type="text" placeholder="Optional. Used as the file name." autocomplete="off" enterkeyhint="done">
+      </div>
+      <div>
+        <label for="paste">Text to read</label>
+        <textarea id="paste" placeholder="Paste or type here"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn quiet" id="btnClipboard" type="button">Paste from clipboard</button>
+        <button class="btn quiet" id="btnClear" type="button">Clear</button>
+        <span class="count" id="pasteCount">0 words</span>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-files" role="tabpanel" aria-labelledby="tab-files" hidden>
+      <input id="fileInput" class="sr-only" type="file" multiple accept=".txt,.text,.md,.markdown,.html,.htm,text/plain,text/markdown,text/html">
+      <label class="drop" id="drop" for="fileInput">
+        <strong>Choose text files</strong>
+        <span>.txt, .md or .html. You can pick several, or drop them here.</span>
+      </label>
+      <ul class="files" id="fileList"></ul>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-voice">
+    <h2 id="h-voice">Voice and output</h2>
+
+    <div>
+      <label for="voice">Voice</label>
+      <div class="voice-row">
+        <select id="voice"></select>
+        <button class="btn" id="btnPreview" type="button">Preview</button>
+      </div>
+      <audio id="previewAudio" controls hidden></audio>
+    </div>
+
+    <div>
+      <label for="speed">Speed<output id="speedOut" for="speed">1.00×</output></label>
+      <input id="speed" type="range" min="0.7" max="1.3" step="0.05" value="1">
+    </div>
+
+    <div class="grid2">
+      <div>
+        <label for="format">Save as</label>
+        <select id="format">
+          <option value="mp3">MP3 (small, plays anywhere)</option>
+          <option value="wav">WAV (lossless, large)</option>
+        </select>
+      </div>
+      <div>
+        <label for="engine">Engine</label>
+        <select id="engine">
+          <option value="wasm-q8">Standard · 92 MB download</option>
+          <option value="webgpu-fp32">WebGPU · 326 MB download</option>
+        </select>
+      </div>
+    </div>
+    <p class="hint">Standard works on every phone. WebGPU can be several times faster but uses a lot more memory. If the page reloads while it loads, switch back to Standard.</p>
+
+    <label class="check" for="clean">
+      <input type="checkbox" id="clean" checked>
+      <span>Skip markup, links and code blocks, so Markdown and HTML read as plain prose</span>
+    </label>
+  </section>
+
+  <section class="panel" aria-label="Generate">
+    <button class="btn primary" id="go" type="button" disabled>Generate audio</button>
+    <p class="est" id="est">Nothing to read yet.</p>
+
+    <div class="progress" id="progress" hidden>
+      <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Progress"><i id="barFill"></i></div>
+      <p class="plabel" id="progLabel"></p>
+      <p class="psub" id="progSub"></p>
+      <p class="hint">Keep this page open with the screen on. iPhone pauses web pages when the screen locks.</p>
+      <div><button class="btn quiet" id="btnCancel" type="button" hidden>Cancel</button></div>
+    </div>
+
+    <p class="note" id="note" role="status" hidden></p>
+    <div class="error" id="error" role="alert" hidden></div>
+  </section>
+
+  <section id="outputs" aria-labelledby="h-out" hidden>
+    <h2 id="h-out" style="margin-bottom:0.75rem">Audio</h2>
+    <ul class="results" id="results"></ul>
+  </section>
+
+  <footer>
+    <p>Your text never leaves this device. The speech model (Kokoro-82M) downloads once from Hugging Face and your browser keeps a copy. The code libraries load from jsDelivr.</p>
+    <p>Tip: use Share, then Save to Files, to keep a recording. Add this page to your Home Screen to keep the model cached.</p>
+  </footer>
+</main>
+
+<script>
+/* ---------- Text and audio helpers (no DOM, so they can be tested in Node) ---------- */
+var Core = (function () {
+  'use strict';
+
+  var PAUSES = { para: 0.5, sentence: 0.16, clause: 0.06 }; // seconds of silence after a chunk
+  var WORDS_PER_MIN = 155; // typical Kokoro pace at 1.0x
+
+  var ENTITIES = {
+    nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+    mdash: '—', ndash: '–', hellip: '…',
+    lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”'
+  };
+
+  function decodeEntities(s) {
+    return s
+      .replace(/&#x([0-9a-f]+);/gi, function (m, h) { return safeCodePoint(parseInt(h, 16)); })
+      .replace(/&#(\d+);/g, function (m, d) { return safeCodePoint(parseInt(d, 10)); })
+      .replace(/&([a-z]+);/gi, function (m, n) {
+        var k = n.toLowerCase();
+        return Object.prototype.hasOwnProperty.call(ENTITIES, k) ? ENTITIES[k] : m;
+      });
+  }
+  function safeCodePoint(n) {
+    try { return String.fromCodePoint(n); } catch (e) { return ''; }
+  }
+
+  function looksLikeHtml(s) {
+    var tags = s.match(/<\/?(p|div|span|br|h[1-6]|ul|ol|li|a|body|html|head|section|article|table|tr|td|img|em|strong|b|i)[\s>\/]/gi);
+    return !!tags && tags.length >= 3;
+  }
+
+  function stripHtml(s) {
+    s = s
+      .replace(/<(script|style|head|noscript|svg|template)\b[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|section|article|header|footer|li|ul|ol|tr|table|blockquote|pre|h[1-6])>/gi, '\n\n')
+      .replace(/<[^>]+>/g, '');
+    return decodeEntities(s);
+  }
+
+  function stripMarkdown(s) {
+    return s
+      .replace(/^---\n[\s\S]*?\n---\n/, '')                 // front matter
+      .replace(/```[\s\S]*?```/g, '\n\n')                    // fenced code
+      .replace(/~~~[\s\S]*?~~~/g, '\n\n')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<https?:[^>]*>/g, '')
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')              // images keep alt text
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')               // links keep their text
+      .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
+      .replace(/^[ \t]*\[[^\]]+\]:[ \t]*\S+.*$/gm, '')       // link reference definitions
+      .replace(/\bhttps?:\/\/\S+/g, '')                      // bare URLs
+      .replace(/^[ \t]{0,3}#{1,6}[ \t]+(.*?)[ \t]*#*[ \t]*$/gm, '\n\n$1\n\n') // headings stand alone
+      .replace(/^[ \t]*(?:={3,}|-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '') // rules and setext underlines
+      .replace(/^[ \t]{0,3}>[ \t]?/gm, '')                   // block quotes
+      .replace(/^[ \t]*(?:[-*+•]|\d{1,3}[.)])[ \t]+(.*)$/gm, '\n\n$1\n\n') // list items stand alone
+      .replace(/^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)*\|?[ \t]*$/gm, '') // table rules
+      .replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, function (m, row) {
+        return row.split('|').map(function (c) { return c.trim(); }).filter(Boolean).join(', ') + '.';
+      })
+      .replace(/\[\^?\d+\]/g, '')                            // footnote markers
+      .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+      .replace(/__([^_\n]+)__/g, '$1')
+      .replace(/~~([^~\n]+)~~/g, '$1')
+      .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,;:!?])/gm, '$1$2')
+      .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,;:!?])/gm, '$1$2')
+      .replace(/`([^`\n]+)`/g, '$1')
+      .replace(/<\/?[a-zA-Z][^>]*>/g, '');
+  }
+
+  function hasReadable(s) { return /[\p{L}\p{N}]/u.test(s); }
+
+  // Paragraphs are separated by blank lines. Lines inside a paragraph are joined,
+  // which undoes hard wrapping. A lone short line with no end punctuation is a heading.
+  function normaliseParagraphs(t) {
+    var out = [];
+    t.split(/\n[ \t]*\n+/).forEach(function (block) {
+      var lines = block.split('\n')
+        .map(function (l) { return l.replace(/[ \t]+/g, ' ').trim(); })
+        .filter(Boolean);
+      if (!lines.length) return;
+      var s = lines.join(' ');
+      if (!hasReadable(s)) return;
+      if (lines.length === 1 && s.length <= 80 && !/[.!?…:;,"'”’)\]]$/.test(s)) s += '.';
+      out.push(s);
+    });
+    return out.join('\n\n');
+  }
+
+  function cleanText(raw, opts) {
+    opts = opts || {};
+    var markup = opts.markup !== false;
+    var t = String(raw)
+      .replace(/\r\n?/g, '\n')
+      .replace(/ /g, ' ')
+      .replace(/[​-‍⁠﻿�]/g, '');
+    if (markup) {
+      if (opts.html === true || (opts.html !== false && looksLikeHtml(t))) t = stripHtml(t);
+      t = stripMarkdown(t);
+    }
+    t = t.replace(/\p{Extended_Pictographic}/gu, '').replace(/️/g, '');
+    return normaliseParagraphs(t);
+  }
+
+  function countWords(s) {
+    var m = s.match(/\S+/g);
+    return m ? m.length : 0;
+  }
+
+  // Sentences end at . ! ? followed by whitespace. "3.14" stays whole. Abbreviations such as
+  // "Mr." split, but chunking joins neighbours back together, so nothing is lost.
+  function splitSentences(par) {
+    var parts = par.split(/([.!?…]+["'”’)\]]*)(\s+)/);
+    var out = [];
+    var i = 0;
+    for (; i + 2 < parts.length; i += 3) {
+      var s = (parts[i] + parts[i + 1]).trim();
+      if (s) out.push(s);
+    }
+    var tail = (parts[i] || '').trim();
+    if (tail) out.push(tail);
+    return out;
+  }
+
+  function splitWords(s, max) {
+    var out = [];
+    var cur = '';
+    s.split(/\s+/).forEach(function (w) {
+      if (!w) return;
+      if (w.length > max) {
+        if (cur) { out.push(cur); cur = ''; }
+        for (var i = 0; i < w.length; i += max) out.push(w.slice(i, i + max));
+        return;
+      }
+      if (cur && cur.length + 1 + w.length > max) { out.push(cur); cur = w; }
+      else cur = cur ? cur + ' ' + w : w;
+    });
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  // A sentence longer than max is cut at commas, semicolons, colons and dashes first, then at spaces.
+  function splitLong(s, max) {
+    var clauses = s.match(/[^,;:—–]+[,;:—–]*\s*/g) || [s];
+    var out = [];
+    var cur = '';
+    clauses.forEach(function (c) {
+      c = c.trim();
+      if (!c) return;
+      if (c.length > max) {
+        if (cur) { out.push(cur); cur = ''; }
+        splitWords(c, max).forEach(function (w) { out.push(w); });
+        return;
+      }
+      if (cur && cur.length + 1 + c.length > max) { out.push(cur); cur = c; }
+      else cur = cur ? cur + ' ' + c : c;
+    });
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  // Kokoro reads at most about 500 phonemes at once, so text goes in pieces of up to `max` characters.
+  function chunkText(clean, max) {
+    max = max || 300;
+    var out = [];
+    clean.split(/\n{2,}/).map(function (p) { return p.trim(); }).filter(Boolean).forEach(function (para) {
+      var cur = '';
+      var curEndsSentence = true;
+      splitSentences(para).forEach(function (sentence) {
+        var pieces = sentence.length > max ? splitLong(sentence, max) : [sentence];
+        pieces.forEach(function (piece, i) {
+          if (cur && cur.length + 1 + piece.length > max) {
+            out.push({ text: cur, end: curEndsSentence ? 'sentence' : 'clause' });
+            cur = '';
+          }
+          cur = cur ? cur + ' ' + piece : piece;
+          curEndsSentence = i === pieces.length - 1;
+        });
+      });
+      if (cur) out.push({ text: cur, end: 'para' });
+    });
+    return out;
+  }
+
+  function floatToInt16(f32) {
+    var out = new Int16Array(f32.length);
+    for (var i = 0; i < f32.length; i++) {
+      var s = f32[i];
+      if (s > 1) s = 1; else if (s < -1) s = -1;
+      out[i] = s < 0 ? Math.round(s * 32768) : Math.round(s * 32767);
+    }
+    return out;
+  }
+
+  function wavHeader(numSamples, rate) {
+    var buf = new ArrayBuffer(44);
+    var v = new DataView(buf);
+    function str(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + numSamples * 2, true);
+    str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, numSamples * 2, true);
+    return new Uint8Array(buf);
+  }
+
+  function slug(s) {
+    var t = String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '');
+    return t || 'audio';
+  }
+
+  function titleFrom(text) {
+    var words = String(text).replace(/[#*_>`\[\]()]/g, ' ').trim().split(/\s+/).slice(0, 6).join(' ');
+    return words.length > 48 ? words.slice(0, 48).trim() : (words || 'Untitled');
+  }
+
+  function clock(sec) {
+    sec = Math.max(0, Math.round(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return h ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+  }
+
+  function approx(sec) {
+    if (sec < 45) return 'under a minute';
+    if (sec < 3600) return 'about ' + Math.max(1, Math.round(sec / 60)) + ' min';
+    var h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    if (m === 60) { h += 1; m = 0; }
+    return 'about ' + h + ' h' + (m ? ' ' + m + ' min' : '');
+  }
+
+  function fmtBytes(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + ' MB';
+    return Math.max(1, Math.round(n / 1e3)) + ' KB';
+  }
+
+  function estimateSeconds(words, speed) {
+    return (words / WORDS_PER_MIN) * 60 / (speed || 1);
+  }
+
+  return {
+    PAUSES: PAUSES, cleanText: cleanText, chunkText: chunkText, countWords: countWords,
+    floatToInt16: floatToInt16, wavHeader: wavHeader, slug: slug, titleFrom: titleFrom,
+    clock: clock, approx: approx, fmtBytes: fmtBytes, estimateSeconds: estimateSeconds
+  };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = Core;
+</script>
+
+<script type="module">
+/* ---------- App ---------- */
+const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.js';
+const LAME_URL = 'https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js';
+const MP3_KBPS = 64;
+const PREFS_KEY = 'kokoro-reader:prefs';
+
+const VOICES = [
+  ['American English, female', [['af_heart', 'Heart'], ['af_bella', 'Bella'], ['af_nicole', 'Nicole'], ['af_sarah', 'Sarah'], ['af_sky', 'Sky'], ['af_alloy', 'Alloy'], ['af_aoede', 'Aoede'], ['af_jessica', 'Jessica'], ['af_kore', 'Kore'], ['af_nova', 'Nova'], ['af_river', 'River']]],
+  ['American English, male', [['am_michael', 'Michael'], ['am_fenrir', 'Fenrir'], ['am_puck', 'Puck'], ['am_adam', 'Adam'], ['am_echo', 'Echo'], ['am_eric', 'Eric'], ['am_liam', 'Liam'], ['am_onyx', 'Onyx'], ['am_santa', 'Santa']]],
+  ['British English, female', [['bf_emma', 'Emma'], ['bf_isabella', 'Isabella'], ['bf_alice', 'Alice'], ['bf_lily', 'Lily']]],
+  ['British English, male', [['bm_george', 'George'], ['bm_fable', 'Fable'], ['bm_daniel', 'Daniel'], ['bm_lewis', 'Lewis']]],
+];
+
+const $ = (id) => document.getElementById(id);
+const paint = () => new Promise((resolve) => {
+  let done = false;
+  const finish = () => { if (!done) { done = true; resolve(); } };
+  requestAnimationFrame(finish);
+  setTimeout(finish, 50); // animation frames stop in background tabs
+});
+
+let mode = 'paste';
+let files = [];            // { id, name, title, text, kind }
+let engine = null;         // { key, tts }
+let kokoroMod = null;
+let busy = false;
+let cancelled = false;
+let wake = null;
+let results = [];          // { id, title, blob, url, filename, ... }
+let nextId = 1;
+
+/* ---- preferences ---- */
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (e) { return {}; }
+}
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      voice: $('voice').value, speed: $('speed').value, format: $('format').value,
+      engine: $('engine').value, clean: $('clean').checked,
+    }));
+  } catch (e) { /* private mode: ignore */ }
+}
+
+/* ---- small UI helpers ---- */
+function setStatus(text, ready) {
+  const el = $('engineStatus');
+  el.textContent = text;
+  el.classList.toggle('ready', !!ready);
+}
+function showNote(text) { const n = $('note'); n.textContent = text; n.hidden = !text; }
+function showError(err) {
+  const box = $('error');
+  box.replaceChildren();
+  const msg = document.createElement('span');
+  msg.textContent = (err && err.message) || String(err);
+  box.append(msg);
+  if (err && err.detail) {
+    const code = document.createElement('code');
+    code.textContent = err.detail;
+    box.append(code);
+  }
+  box.hidden = false;
+}
+function clearError() { $('error').hidden = true; }
+function wrapError(err, message) {
+  const e = new Error(message);
+  e.detail = String((err && err.message) || err);
+  return e;
+}
+function setProgress(frac, label, sub) {
+  $('progress').hidden = false;
+  const bar = $('bar');
+  if (frac == null) {
+    bar.classList.add('indeterminate');
+    $('barFill').style.width = '';
+    bar.removeAttribute('aria-valuenow');
+  } else {
+    bar.classList.remove('indeterminate');
+    const pct = Math.max(0, Math.min(100, frac * 100));
+    $('barFill').style.width = Math.max(2, pct).toFixed(1) + '%';
+    bar.setAttribute('aria-valuenow', String(Math.round(pct)));
+  }
+  $('progLabel').textContent = label || '';
+  $('progSub').textContent = sub || '';
+}
+function hideProgress() { $('progress').hidden = true; $('btnCancel').hidden = true; }
+function setBusy(b) {
+  busy = b;
+  document.body.classList.toggle('busy', b);
+  $('btnPreview').disabled = b;
+  $('go').disabled = b || !hasText();
+}
+
+/* ---- screen wake lock (iOS pauses pages when the screen locks) ---- */
+async function acquireWake() {
+  try { if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); } catch (e) { wake = null; }
+}
+function releaseWake() {
+  try { if (wake) wake.release(); } catch (e) { /* ignore */ }
+  wake = null;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && busy && (!wake || wake.released)) acquireWake();
+});
+
+/* ---- input ---- */
+function collectJobs() {
+  if (mode === 'paste') {
+    const text = $('paste').value;
+    if (!text.trim()) return [];
+    return [{ title: $('title').value.trim() || Core.titleFrom(text), text, kind: 'txt' }];
+  }
+  return files.map((f) => ({ title: f.title, text: f.text, kind: f.kind }));
+}
+function cleanOpts(job) {
+  return { markup: $('clean').checked, html: job.kind === 'html' ? true : undefined };
+}
+function hasText() {
+  return collectJobs().length > 0 && collectJobs().some((j) => j.text.trim());
+}
+
+let estTimer = 0;
+function scheduleEstimate() { clearTimeout(estTimer); estTimer = setTimeout(updateEstimate, 200); }
+function updateEstimate() {
+  const jobs = collectJobs();
+  const speed = Number($('speed').value);
+  let words = 0;
+  jobs.forEach((j) => { words += Core.countWords(Core.cleanText(j.text, cleanOpts(j))); });
+  $('go').disabled = busy || words === 0;
+  if (mode === 'paste') $('pasteCount').textContent = words.toLocaleString() + (words === 1 ? ' word' : ' words');
+  if (!words) { $('est').textContent = mode === 'paste' ? 'Nothing to read yet.' : 'Add one or more files to begin.'; return; }
+  let line = (jobs.length > 1 ? jobs.length + ' files · ' : '') + words.toLocaleString() + ' words · ' +
+    Core.approx(Core.estimateSeconds(words, speed)) + ' of audio';
+  if (!engine) line += ' · first run downloads the model and keeps it';
+  $('est').textContent = line;
+}
+
+function setMode(next) {
+  mode = next;
+  for (const m of ['paste', 'files']) {
+    const on = m === next;
+    $('tab-' + m).setAttribute('aria-selected', String(on));
+    $('tab-' + m).tabIndex = on ? 0 : -1;
+    $('pane-' + m).hidden = !on;
+  }
+  updateEstimate();
+}
+
+function kindFor(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'md' || ext === 'markdown') return 'md';
+  return 'txt';
+}
+
+async function addFiles(list) {
+  clearError();
+  for (const f of Array.from(list)) {
+    try {
+      const text = await f.text();
+      if (!/[\p{L}\p{N}]/u.test(text)) { showError(new Error('"' + f.name + '" has no readable text.')); continue; }
+      files.push({ id: nextId++, name: f.name, title: f.name.replace(/\.[^.]+$/, '') || f.name, text, kind: kindFor(f.name) });
+    } catch (e) {
+      showError(wrapError(e, 'Could not read "' + f.name + '".'));
+    }
+  }
+  renderFiles();
+  updateEstimate();
+}
+
+function renderFiles() {
+  const ul = $('fileList');
+  ul.replaceChildren();
+  files.forEach((f) => {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = f.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = Core.countWords(Core.cleanText(f.text, cleanOpts(f))).toLocaleString() + ' words';
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.textContent = '×';
+    rm.setAttribute('aria-label', 'Remove ' + f.name);
+    rm.addEventListener('click', () => {
+      files = files.filter((x) => x.id !== f.id);
+      renderFiles();
+      updateEstimate();
+    });
+    li.append(name, meta, rm);
+    ul.append(li);
+  });
+}
+
+/* ---- model ---- */
+async function ensureModel() {
+  const wanted = $('engine').value;
+  if (engine && engine.key === wanted) return engine.tts;
+  engine = null;
+  setStatus('Loading speech model', false);
+  setProgress(null, 'Loading the speech engine', '');
+
+  if (!kokoroMod) {
+    try { kokoroMod = await import(KOKORO_URL); }
+    catch (err) { throw wrapError(err, 'Could not load the speech engine. Check your connection and try again.'); }
+  }
+
+  const load = (key) => {
+    const [device, dtype] = key.split('-');
+    const seen = new Map();
+    const progress_callback = (p) => {
+      if (!p) return;
+      if (p.status === 'progress' && p.file && p.total) seen.set(p.file, { loaded: p.loaded, total: p.total });
+      else if (p.status === 'done' && p.file && seen.has(p.file)) { const s = seen.get(p.file); s.loaded = s.total; }
+      let loaded = 0, total = 0;
+      seen.forEach((s) => { loaded += s.loaded; total += s.total; });
+      if (total) setProgress(loaded / total, 'Downloading the speech model', Core.fmtBytes(loaded) + ' of ' + Core.fmtBytes(total) + ' · kept for next time');
+    };
+    return kokoroMod.KokoroTTS.from_pretrained(MODEL_ID, { dtype, device, progress_callback });
+  };
+
+  const modelError = 'Could not load the speech model. If the page reloaded, the phone may have run out of memory, so close other tabs and use the Standard engine.';
+  let key = wanted;
+  let tts;
+  try {
+    tts = await load(key);
+  } catch (err) {
+    if (key === 'wasm-q8') throw wrapError(err, modelError);
+    showNote('WebGPU did not start, so the Standard engine is being used instead.');
+    key = 'wasm-q8';
+    $('engine').value = key;
+    try { tts = await load(key); } catch (err2) { throw wrapError(err2, modelError); }
+  }
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* ignore */ }
+  engine = { key, tts };
+  setStatus('Speech model ready · ' + (key === 'wasm-q8' ? 'Standard engine' : 'WebGPU engine'), true);
+  return tts;
+}
+
+/* ---- MP3 ---- */
+function loadLame() {
+  const ready = () => window.lamejs && (window.lamejs.Mp3Encoder || typeof window.lamejs === 'function');
+  if (ready()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = LAME_URL;
+    s.onload = () => (ready() ? resolve() : reject(new Error('MP3 encoder did not initialise')));
+    s.onerror = () => reject(new Error('MP3 encoder failed to load'));
+    document.head.append(s);
+  });
+}
+function mp3EncoderClass() {
+  const l = window.lamejs;
+  if (l && l.Mp3Encoder) return l.Mp3Encoder;
+  if (typeof l === 'function') { const inst = new l(); if (inst && inst.Mp3Encoder) return inst.Mp3Encoder; }
+  return window.Mp3Encoder || null;
+}
+async function encodeMp3(pieces, rate, onProgress) {
+  const Enc = mp3EncoderClass();
+  if (!Enc) throw new Error('MP3 encoder unavailable');
+  const enc = new Enc(1, rate, MP3_KBPS);
+  const out = [];
+  const BLOCK = 1152;
+  for (let p = 0; p < pieces.length; p++) {
+    const pcm = pieces[p];
+    for (let i = 0; i < pcm.length; i += BLOCK) {
+      const buf = enc.encodeBuffer(pcm.subarray(i, Math.min(i + BLOCK, pcm.length)));
+      if (buf.length) out.push(new Uint8Array(buf));
+    }
+    if (p % 4 === 3) { onProgress(p / pieces.length); await paint(); }
+  }
+  const tail = enc.flush();
+  if (tail.length) out.push(new Uint8Array(tail));
+  return new Blob(out, { type: 'audio/mpeg' });
+}
+
+/* ---- synthesis ---- */
+async function synth(job, tts, jobIndex, jobCount) {
+  const clean = Core.cleanText(job.text, cleanOpts(job));
+  const chunks = Core.chunkText(clean).filter((c) => /[\p{L}\p{N}]/u.test(c.text));
+  if (!chunks.length) { showError(new Error('"' + job.title + '" has no readable text.')); return null; }
+
+  const voice = $('voice').value;
+  const speed = Number($('speed').value);
+  const totalChars = chunks.reduce((n, c) => n + c.text.length, 0);
+  const pieces = [];
+  let rate = 24000, samples = 0, doneChars = 0, failed = 0;
+  const started = performance.now();
+  const prefix = jobCount > 1 ? 'File ' + (jobIndex + 1) + ' of ' + jobCount + ' · ' : '';
+
+  $('btnCancel').hidden = false;
+  setProgress(0, prefix + 'Reading ' + job.title, 'Starting');
+  await paint();
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (cancelled) return null;
+    const c = chunks[i];
+    try {
+      const audio = await tts.generate(c.text, { voice, speed });
+      rate = audio.sampling_rate || rate;
+      const pcm = Core.floatToInt16(audio.audio);
+      pieces.push(pcm);
+      samples += pcm.length;
+      const gap = Core.PAUSES[c.end] || 0;
+      if (gap) { const silence = new Int16Array(Math.round(gap * rate)); pieces.push(silence); samples += silence.length; }
+    } catch (e) {
+      failed++;
+      console.warn('Skipped a passage the model could not read:', c.text, e);
+    }
+    doneChars += c.text.length;
+    const elapsed = (performance.now() - started) / 1000;
+    const eta = elapsed > 3 ? ((totalChars - doneChars) / (doneChars / elapsed)) : null;
+    const realtime = elapsed > 0 ? (samples / rate) / elapsed : 0;
+    setProgress(
+      doneChars / totalChars,
+      prefix + 'Reading part ' + (i + 1) + ' of ' + chunks.length,
+      job.title + (eta != null ? ' · ' + Core.approx(eta) + ' left' : '') + (realtime ? ' · ' + realtime.toFixed(1) + '× real time' : '')
+    );
+    await paint();
+  }
+  if (cancelled) return null;
+  if (!samples) { showError(new Error('The model could not read "' + job.title + '". Try different text.')); return null; }
+  if (failed) showNote(failed + (failed === 1 ? ' passage was' : ' passages were') + ' skipped because the model could not read ' + (failed === 1 ? 'it' : 'them') + '.');
+
+  let blob = null;
+  let ext = 'wav';
+  if ($('format').value === 'mp3') {
+    setProgress(0, prefix + 'Encoding MP3', job.title);
+    await paint();
+    try {
+      await loadLame();
+      blob = await encodeMp3(pieces, rate, (f) => setProgress(f, prefix + 'Encoding MP3', job.title));
+      ext = 'mp3';
+    } catch (e) {
+      console.warn(e);
+      showNote('MP3 encoding was not available, so this one was saved as WAV instead.');
+      blob = null;
+    }
+  }
+  if (!blob) blob = new Blob([Core.wavHeader(samples, rate), ...pieces], { type: 'audio/wav' });
+
+  return {
+    id: nextId++, title: job.title, blob, ext,
+    filename: Core.slug(job.title) + '.' + ext,
+    seconds: samples / rate, voice,
+  };
+}
+
+async function generate() {
+  if (busy) return;
+  const jobs = collectJobs().filter((j) => j.text.trim());
+  if (!jobs.length) return;
+  clearError(); showNote('');
+  cancelled = false;
+  setBusy(true);
+  await acquireWake();
+  try {
+    const tts = await ensureModel();
+    for (let i = 0; i < jobs.length; i++) {
+      if (cancelled) break;
+      const r = await synth(jobs[i], tts, i, jobs.length);
+      if (r) addResult(r);
+    }
+    if (cancelled) showNote('Cancelled.');
+  } catch (err) {
+    showError(err);
+  } finally {
+    releaseWake();
+    hideProgress();
+    setBusy(false);
+    updateEstimate();
+  }
+}
+
+async function preview() {
+  if (busy) return;
+  clearError(); showNote('');
+  setBusy(true);
+  try {
+    const tts = await ensureModel();
+    setProgress(null, 'Making a sample', '');
+    const audio = await tts.generate('Hello. This is how this voice sounds, at the speed you picked.', {
+      voice: $('voice').value, speed: Number($('speed').value),
+    });
+    const pcm = Core.floatToInt16(audio.audio);
+    const blob = new Blob([Core.wavHeader(pcm.length, audio.sampling_rate || 24000), pcm], { type: 'audio/wav' });
+    const el = $('previewAudio');
+    if (el.dataset.url) URL.revokeObjectURL(el.dataset.url);
+    el.dataset.url = URL.createObjectURL(blob);
+    el.src = el.dataset.url;
+    el.hidden = false;
+    showNote('Sample ready. Press play below the voice picker.');
+  } catch (err) {
+    showError(err);
+  } finally {
+    hideProgress();
+    setBusy(false);
+    updateEstimate();
+  }
+}
+
+/* ---- results ---- */
+function addResult(r) {
+  r.url = URL.createObjectURL(r.blob);
+  results.unshift(r);
+  $('outputs').hidden = false;
+
+  const li = document.createElement('li');
+  li.className = 'result';
+  const h = document.createElement('h3');
+  h.textContent = r.title;
+  const meta = document.createElement('p');
+  meta.className = 'meta';
+  meta.textContent = Core.clock(r.seconds) + ' · ' + Core.fmtBytes(r.blob.size) + ' · ' + r.ext.toUpperCase() + ' · ' + r.voice;
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.preload = 'metadata';
+  audio.src = r.url;
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const mk = (label, cls, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn ' + cls; b.textContent = label;
+    b.addEventListener('click', fn);
+    return b;
+  };
+  row.append(
+    mk('Share or save', '', () => shareResult(r)),
+    mk('Download', 'quiet', () => download(r)),
+    mk('Remove', 'quiet', () => {
+      URL.revokeObjectURL(r.url);
+      results = results.filter((x) => x.id !== r.id);
+      li.remove();
+      if (!results.length) $('outputs').hidden = true;
+    })
+  );
+  li.append(h, meta, audio, row);
+  $('results').prepend(li);
+}
+
+async function shareResult(r) {
+  try {
+    const file = new File([r.blob], r.filename, { type: r.blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: r.title });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // the person closed the share sheet
+  }
+  download(r);
+}
+function download(r) {
+  const a = document.createElement('a');
+  a.href = r.url;
+  a.download = r.filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+/* ---- home screen icon, drawn at runtime so the page stays one file ---- */
+function setTouchIcon() {
+  try {
+    const c = document.createElement('canvas');
+    c.width = c.height = 180;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0C6A57';
+    g.fillRect(0, 0, 180, 180);
+    g.fillStyle = '#F2FBF7';
+    [36, 72, 108, 64, 28].forEach((h, i) => {
+      const x = 26 + i * 28, y = 90 - h / 2;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, y, 16, h, 8); else g.rect(x, y, 16, h);
+      g.fill();
+    });
+    const link = document.createElement('link');
+    link.rel = 'apple-touch-icon';
+    link.href = c.toDataURL('image/png');
+    document.head.append(link);
+  } catch (e) { /* icon is optional */ }
+}
+
+/* ---- wiring ---- */
+function init() {
+  // voices
+  const sel = $('voice');
+  VOICES.forEach(([group, list]) => {
+    const og = document.createElement('optgroup');
+    og.label = group;
+    list.forEach(([id, name]) => { const o = document.createElement('option'); o.value = id; o.textContent = name; og.append(o); });
+    sel.append(og);
+  });
+
+  // WebGPU option only where the browser exposes it
+  if (!('gpu' in navigator)) {
+    const o = $('engine').querySelector('option[value="webgpu-fp32"]');
+    o.disabled = true;
+    o.textContent = 'WebGPU · not available here';
+  }
+
+  // saved settings
+  const p = loadPrefs();
+  if (p.voice && sel.querySelector('option[value="' + p.voice + '"]')) sel.value = p.voice;
+  if (p.speed) $('speed').value = p.speed;
+  if (p.format === 'wav' || p.format === 'mp3') $('format').value = p.format;
+  const savedEngine = p.engine && $('engine').querySelector('option[value="' + p.engine + '"]');
+  if (savedEngine && !savedEngine.disabled) $('engine').value = p.engine;
+  if (typeof p.clean === 'boolean') $('clean').checked = p.clean;
+  $('speedOut').textContent = Number($('speed').value).toFixed(2) + '×';
+
+  // tabs
+  $('tab-paste').addEventListener('click', () => setMode('paste'));
+  $('tab-files').addEventListener('click', () => setMode('files'));
+  document.querySelector('.seg').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      const next = mode === 'paste' ? 'files' : 'paste';
+      setMode(next);
+      $('tab-' + next).focus();
+    }
+  });
+
+  // paste
+  $('paste').addEventListener('input', scheduleEstimate);
+  $('btnClear').addEventListener('click', () => { $('paste').value = ''; $('title').value = ''; updateEstimate(); $('paste').focus(); });
+  $('btnClipboard').addEventListener('click', async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (!t.trim()) { showNote('The clipboard is empty.'); return; }
+      $('paste').value = t;
+      showNote('');
+      updateEstimate();
+    } catch (e) {
+      showNote('Could not read the clipboard. Press and hold in the text box, then choose Paste.');
+    }
+  });
+
+  // files
+  $('fileInput').addEventListener('change', async (e) => { await addFiles(e.target.files); e.target.value = ''; });
+  const drop = $('drop');
+  ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+  ['dragover', 'drop'].forEach((t) => window.addEventListener(t, (e) => e.preventDefault())); // stop the browser opening a dropped file
+
+  // settings
+  $('speed').addEventListener('input', () => { $('speedOut').textContent = Number($('speed').value).toFixed(2) + '×'; scheduleEstimate(); });
+  ['voice', 'speed', 'format', 'engine', 'clean'].forEach((id) => $(id).addEventListener('change', () => { savePrefs(); if (id === 'clean') { renderFiles(); updateEstimate(); } }));
+
+  // actions
+  $('go').addEventListener('click', generate);
+  $('btnPreview').addEventListener('click', preview);
+  $('btnCancel').addEventListener('click', () => { cancelled = true; $('btnCancel').hidden = true; $('progSub').textContent = 'Stopping after this part'; });
+
+  if (typeof HTMLScriptElement.supports === 'function' && !HTMLScriptElement.supports('importmap')) {
+    showError(new Error('This browser is too old to run the speech engine. On iPhone, update to iOS 16.4 or later.'));
+  }
+
+  setTouchIcon();
+  setMode('paste');
+}
+init();
+</script>
+</body>
+</html>
